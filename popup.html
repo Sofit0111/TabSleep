@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Memory Nap Tabs</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="popup-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Memory Nap</p>
+        <h1>Вкладки</h1>
+      </div>
+      <button class="icon-button" id="themeToggle" type="button" aria-label="Переключить тему" title="Переключить тему">
+        <span class="theme-icon" aria-hidden="true"></span>
+      </button>
+    </header>
+
+    <section class="meter-panel" aria-labelledby="memoryTitle">
+      <div class="meter-copy">
+        <p id="memoryTitle" class="panel-label">Оценка экономии</p>
+        <strong id="memorySaved">0 МБ</strong>
+        <span id="sleepingTabs">0 усыпленных вкладок</span>
+      </div>
+      <div class="ring" aria-hidden="true">
+        <svg viewBox="0 0 120 120">
+          <circle class="ring-track" cx="60" cy="60" r="50"></circle>
+          <circle class="ring-progress" id="memoryRing" cx="60" cy="60" r="50"></circle>
+        </svg>
+        <span id="ringPercent">0%</span>
+      </div>
+    </section>
+
+    <section class="profile-panel" aria-label="Профиль нагрузки">
+      <label for="profileSelect">Профиль</label>
+      <select id="profileSelect">
+        <option value="aggressive">Агрессивный · 3 мин</option>
+        <option value="balanced">Баланс · 20 мин</option>
+        <option value="reading">Режим чтения</option>
+      </select>
+    </section>
+
+    <section class="stats-grid" aria-label="Статистика вкладок">
+      <div class="stat">
+        <span>Открыто</span>
+        <strong id="totalTabs">0</strong>
+      </div>
+      <div class="stat">
+        <span>Доступно</span>
+        <strong id="eligibleTabs">0</strong>
+      </div>
+      <div class="stat">
+        <span>Защищено</span>
+        <strong id="protectedTabs">0</strong>
+      </div>
+    </section>
+
+    <section class="chart-panel" aria-labelledby="chartTitle">
+      <div class="section-head">
+        <h2 id="chartTitle">Неделя экономии</h2>
+        <span>МБ</span>
+      </div>
+      <svg id="historyChart" class="history-chart" viewBox="0 0 320 96" role="img" aria-label="График экономии памяти за неделю"></svg>
+    </section>
+
+    <section class="domain-panel" aria-labelledby="domainsTitle">
+      <div class="section-head">
+        <h2 id="domainsTitle">Топ доменов</h2>
+        <span id="domainsHint">0</span>
+      </div>
+      <div id="domainList" class="domain-list"></div>
+    </section>
+
+    <section class="actions" aria-label="Действия">
+      <button class="primary" id="sleepCurrent" type="button">Усыпить текущую</button>
+      <button id="sleepInactive" type="button">Усыпить все неактивные</button>
+      <button id="wakeAll" type="button">Разбудить все</button>
+      <button id="saveSession" type="button">Сохранить сессию</button>
+    </section>
+
+    <section class="tabs-panel" aria-labelledby="tabsTitle">
+      <div class="section-head">
+        <h2 id="tabsTitle">Менеджер вкладок</h2>
+        <span id="tabsHint">0</span>
+      </div>
+      <div id="tabsList" class="tabs-list"></div>
+    </section>
+
+    <footer class="footer-row">
+      <button class="link-button" id="openOptions" type="button">Настройки</button>
+      <span id="statusText" role="status" aria-live="polite">Готово</span>
+    </footer>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

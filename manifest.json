@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Memory Nap Tabs",
+  "description": "Manual, automatic and profile-based tab discarding for lower memory usage.",
+  "version": "2.0.0",
+  "permissions": [
+    "tabs",
+    "storage",
+    "alarms",
+    "activeTab",
+    "contextMenus",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_title": "Memory Nap Tabs",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "options.html",
+  "commands": {
+    "discard-current-tab": {
+      "suggested_key": {
+        "default": "Alt+Shift+S"
+      },
+      "description": "Sleep current tab"
+    },
+    "discard-inactive-tabs": {
+      "suggested_key": {
+        "default": "Alt+Shift+A"
+      },
+      "description": "Sleep all inactive tabs"
+    }
+  }
+}
