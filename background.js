@@ -40,8 +40,11 @@ chrome.runtime.onStartup.addListener(async () => {
 });
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
+  // Исправление бага: пересоздаем таймер только если значение минут ФАКТИЧЕСКИ изменилось
   if (areaName === "sync" && changes.autoSleepMinutes) {
-    scheduleAutoSleep(changes.autoSleepMinutes.newValue);
+    if (changes.autoSleepMinutes.newValue !== changes.autoSleepMinutes.oldValue) {
+      scheduleAutoSleep(changes.autoSleepMinutes.newValue);
+    }
   }
 });
 
@@ -52,12 +55,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 chrome.commands.onCommand.addListener((command) => {
-  if (command === "discard-current-tab") {
-    discardCurrentTab();
-  }
-  if (command === "discard-inactive-tabs") {
-    discardInactiveTabs();
-  }
+  if (command === "discard-current-tab") discardCurrentTab();
+  if (command === "discard-inactive-tabs") discardInactiveTabs();
 });
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
@@ -72,38 +71,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function handleMessage(message) {
-  if (message?.action === "discardCurrent") {
-    const count = await discardCurrentTab();
-    return { count };
-  }
-  if (message?.action === "discardInactive") {
-    const count = await discardInactiveTabs();
-    return { count };
-  }
-  if (message?.action === "discardTab") {
-    const count = await discardTabById(message.tabId);
-    return { count };
-  }
-  if (message?.action === "wakeAll") {
-    const count = await wakeAllTabs();
-    return { count };
-  }
-  if (message?.action === "wakeTab") {
-    const count = await wakeTabById(message.tabId);
-    return { count };
-  }
+  if (message?.action === "discardCurrent") return { count: await discardCurrentTab() };
+  if (message?.action === "discardInactive") return { count: await discardInactiveTabs() };
+  if (message?.action === "discardTab") return { count: await discardTabById(message.tabId) };
+  if (message?.action === "wakeAll") return { count: await wakeAllTabs() };
+  if (message?.action === "wakeTab") return { count: await wakeTabById(message.tabId) };
   if (message?.action === "closeTab") {
     await chrome.tabs.remove(message.tabId);
     return { count: 1 };
   }
-  if (message?.action === "saveSession") {
-    const count = await saveCurrentSession();
-    return { count };
-  }
-  if (message?.action === "restoreSession") {
-    const count = await restoreSession(message.sessionId);
-    return { count };
-  }
+  if (message?.action === "saveSession") return { count: await saveCurrentSession() };
+  if (message?.action === "restoreSession") return { count: await restoreSession(message.sessionId) };
   throw new Error("Unsupported action");
 }
 
@@ -121,15 +99,9 @@ async function migrateLocalSettingsToSync() {
     chrome.storage.local.get({ autoSleepMinutes: null, whitelist: null, theme: null })
   ]);
   const migrated = { ...DEFAULT_SYNC_SETTINGS, ...syncSettings };
-  if (localSettings.autoSleepMinutes !== null) {
-    migrated.autoSleepMinutes = Number(localSettings.autoSleepMinutes) || DEFAULT_SYNC_SETTINGS.autoSleepMinutes;
-  }
-  if (Array.isArray(localSettings.whitelist) && localSettings.whitelist.length > 0) {
-    migrated.whitelist = localSettings.whitelist;
-  }
-  if (localSettings.theme === "dark" || localSettings.theme === "light") {
-    migrated.theme = localSettings.theme;
-  }
+  if (localSettings.autoSleepMinutes !== null) migrated.autoSleepMinutes = Number(localSettings.autoSleepMinutes) || DEFAULT_SYNC_SETTINGS.autoSleepMinutes;
+  if (Array.isArray(localSettings.whitelist) && localSettings.whitelist.length > 0) migrated.whitelist = localSettings.whitelist;
+  if (localSettings.theme === "dark" || localSettings.theme === "light") migrated.theme = localSettings.theme;
   await chrome.storage.sync.set(migrated);
 }
 
@@ -146,31 +118,16 @@ async function scheduleAutoSleep(minutes) {
 
 async function createContextMenus() {
   await chrome.contextMenus.removeAll();
-
-  // Контекстное меню создается в service worker: MV3 не держит постоянную страницу,
-  // поэтому пункты нужно пересоздавать при установке и старте браузера.
-  chrome.contextMenus.create({
-    id: CONTEXT_SLEEP_TAB,
-    title: "Усыпить эту вкладку",
-    contexts: ["page"]
-  });
-  chrome.contextMenus.create({
-    id: CONTEXT_WHITELIST_DOMAIN,
-    title: "Добавить домен в белый список",
-    contexts: ["page", "link"]
-  });
+  chrome.contextMenus.create({ id: CONTEXT_SLEEP_TAB, title: "Усыпить эту вкладку", contexts: ["page"] });
+  chrome.contextMenus.create({ id: CONTEXT_WHITELIST_DOMAIN, title: "Добавить домен в белый список", contexts: ["page", "link"] });
 }
 
 async function handleContextMenu(info, tab) {
-  if (info.menuItemId === CONTEXT_SLEEP_TAB && tab?.id) {
-    await discardTabById(tab.id);
-  }
+  if (info.menuItemId === CONTEXT_SLEEP_TAB && tab?.id) await discardTabById(tab.id);
   if (info.menuItemId === CONTEXT_WHITELIST_DOMAIN) {
     const sourceUrl = info.linkUrl || info.pageUrl || tab?.url || "";
     const domain = getDomain(sourceUrl);
-    if (domain) {
-      await addDomainToWhitelist(domain);
-    }
+    if (domain) await addDomainToWhitelist(domain);
   }
 }
 
@@ -183,9 +140,7 @@ async function addDomainToWhitelist(domain) {
 
 async function discardCurrentTab() {
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!activeTab) {
-    return 0;
-  }
+  if (!activeTab) return 0;
   return discardTabs([activeTab], { allowActive: true });
 }
 
@@ -197,7 +152,17 @@ async function discardTabById(tabId) {
 async function discardInactiveTabs() {
   const settings = await getSyncSettings();
   const tabs = await chrome.tabs.query({});
-  const candidates = tabs.filter((tab) => isDiscardCandidate(tab, settings.whitelist, settings));
+  const now = Date.now();
+  const sleepMs = (settings.autoSleepMinutes || 0) * 60 * 1000;
+
+  const candidates = tabs.filter((tab) => {
+    if (!isDiscardCandidate(tab, settings.whitelist, settings)) return false;
+    // Мягкое автоусыпление: проверяем реальное время последнего доступа к вкладке
+    if (sleepMs > 0 && tab.lastAccessed) {
+      return (now - tab.lastAccessed) >= sleepMs;
+    }
+    return true; // Fallback, если lastAccessed недоступен
+  });
   return discardTabs(candidates);
 }
 
@@ -207,20 +172,16 @@ async function discardTabs(tabs, options = {}) {
 
   for (const tab of tabs) {
     try {
-      if (!isDiscardCandidate(tab, settings.whitelist, settings, options)) {
-        continue;
-      }
+      if (!isDiscardCandidate(tab, settings.whitelist, settings, options)) continue;
 
       const pageState = await inspectTabBeforeDiscard(tab.id, settings.activeProfile);
-      if (pageState.hasUnsavedText) {
-        continue;
-      }
-      if (settings.activeProfile === "reading" && pageState.hasLongTextContent) {
-        continue;
-      }
+      if (pageState.hasUnsavedText || pageState.hasMediaContent) continue;
+      if (settings.activeProfile === "reading" && pageState.hasLongTextContent) continue;
 
       if (tab.active) {
         await moveFocusAwayFromTab(tab);
+        // Небольшая задержка, чтобы Chrome успел физически переключить UI
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
       await chrome.tabs.discard(tab.id);
       count += 1;
@@ -229,18 +190,12 @@ async function discardTabs(tabs, options = {}) {
     }
   }
 
-  if (count > 0) {
-    await addSavedMemory(count * MEMORY_PER_TAB_MB);
-  }
+  if (count > 0) await addSavedMemory(count * MEMORY_PER_TAB_MB);
   return count;
 }
 
 async function inspectTabBeforeDiscard(tabId, activeProfile) {
   try {
-    // chrome.scripting.executeScript запускает изолированную функцию прямо в странице.
-    // Здесь проверяем две вещи перед discard: есть ли заполненные текстовые поля и
-    // является ли страница длинным текстом для профиля чтения. Это снижает риск
-    // потери несохраненного ввода и не усыпляет статьи, которые пользователь читает.
     const [result] = await chrome.scripting.executeScript({
       target: { tabId },
       func: (profile) => {
@@ -249,16 +204,23 @@ async function inspectTabBeforeDiscard(tabId, activeProfile) {
           const value = typeof element.value === "string" ? element.value.trim() : "";
           return value.length > 0 && !element.disabled && !element.readOnly;
         });
+        
+        // Защита плееров (пауза или активные)
+        const hasMediaContent = document.querySelectorAll("video, audio").length > 0;
+        
         const bodyText = document.body?.innerText || "";
         const paragraphs = document.querySelectorAll("article p, main p, p").length;
         const hasLongTextContent = profile === "reading" && bodyText.length > 7000 && paragraphs >= 8;
-        return { hasUnsavedText, hasLongTextContent };
+        
+        return { hasUnsavedText, hasLongTextContent, hasMediaContent };
       },
       args: [activeProfile]
     });
-    return result?.result || { hasUnsavedText: false, hasLongTextContent: false };
+    // Если скрипт отработал, но вернул null (редкий баг Chrome), перестраховываемся
+    return result?.result || { hasUnsavedText: true, hasLongTextContent: true, hasMediaContent: true };
   } catch (error) {
-    return { hasUnsavedText: false, hasLongTextContent: false };
+    // Если страница about:blank, не загружена или это системный URL — не трогаем её
+    return { hasUnsavedText: true, hasLongTextContent: true, hasMediaContent: true };
   }
 }
 
@@ -275,9 +237,7 @@ async function moveFocusAwayFromTab(tab) {
 async function wakeAllTabs() {
   const tabs = (await chrome.tabs.query({})).filter((tab) => tab.discarded);
   let count = 0;
-  for (const tab of tabs) {
-    count += await wakeTab(tab);
-  }
+  for (const tab of tabs) count += await wakeTab(tab);
   return count;
 }
 
@@ -288,9 +248,7 @@ async function wakeTabById(tabId) {
 
 async function wakeTab(tab) {
   try {
-    if (!tab.id || !isAllowedUrl(tab.url) || !tab.discarded) {
-      return 0;
-    }
+    if (!tab.id || !isAllowedUrl(tab.url) || !tab.discarded) return 0;
     await chrome.tabs.reload(tab.id);
     return 1;
   } catch (error) {
@@ -303,30 +261,18 @@ async function saveCurrentSession() {
   const tabs = await chrome.tabs.query({});
   const sessionTabs = tabs
     .filter((tab) => tab.url && isAllowedUrl(tab.url))
-    .map((tab) => ({
-      url: tab.url,
-      title: tab.title || tab.url,
-      pinned: Boolean(tab.pinned)
-    }));
+    .map((tab) => ({ url: tab.url, title: tab.title || tab.url, pinned: Boolean(tab.pinned) }));
   const tabIdsToClose = tabs
     .filter((tab) => tab.id && tab.url && isAllowedUrl(tab.url))
     .map((tab) => tab.id);
 
-  if (sessionTabs.length === 0) {
-    return 0;
-  }
+  if (sessionTabs.length === 0) return 0;
 
   const stats = await getLocalStats();
   const savedSessions = Array.isArray(stats.savedSessions) ? stats.savedSessions : [];
-  const session = {
-    id: String(Date.now()),
-    createdAt: new Date().toISOString(),
-    tabs: sessionTabs
-  };
+  const session = { id: String(Date.now()), createdAt: new Date().toISOString(), tabs: sessionTabs };
 
-  await chrome.storage.local.set({
-    savedSessions: [session, ...savedSessions].slice(0, 12)
-  });
+  await chrome.storage.local.set({ savedSessions: [session, ...savedSessions].slice(0, 12) });
   await chrome.tabs.remove(tabIdsToClose);
   return sessionTabs.length;
 }
@@ -335,9 +281,7 @@ async function restoreSession(sessionId) {
   const stats = await getLocalStats();
   const savedSessions = Array.isArray(stats.savedSessions) ? stats.savedSessions : [];
   const session = savedSessions.find((item) => item.id === sessionId) || savedSessions[0];
-  if (!session) {
-    return 0;
-  }
+  if (!session) return 0;
   for (const tab of session.tabs) {
     await chrome.tabs.create({ url: tab.url, pinned: Boolean(tab.pinned), active: false });
   }
@@ -357,18 +301,10 @@ async function addSavedMemory(amount) {
 }
 
 function isDiscardCandidate(tab, whitelist, settings, options = {}) {
-  if (!tab?.id || tab.discarded || tab.pinned || tab.audible) {
-    return false;
-  }
-  if (!options.allowActive && tab.active) {
-    return false;
-  }
-  if (!isAllowedUrl(tab.url) || isWhitelisted(tab.url, whitelist)) {
-    return false;
-  }
-  if (settings.activeProfile === "reading" && tab.active) {
-    return false;
-  }
+  if (!tab?.id || tab.discarded || tab.pinned || tab.audible) return false;
+  if (!options.allowActive && tab.active) return false;
+  if (!isAllowedUrl(tab.url) || isWhitelisted(tab.url, whitelist)) return false;
+  if (settings.activeProfile === "reading" && tab.active) return false;
   return true;
 }
 

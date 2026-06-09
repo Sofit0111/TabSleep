@@ -1,10 +1,6 @@
 const MEMORY_PER_TAB_MB = 70;
 const RING_LENGTH = 314;
-const PROFILE_TIMERS = {
-  aggressive: 3,
-  balanced: 20,
-  reading: 20
-};
+const PROFILE_TIMERS = { aggressive: 3, balanced: 20, reading: 20 };
 const DEFAULT_SYNC_SETTINGS = {
   theme: "light",
   autoSleepMinutes: PROFILE_TIMERS.balanced,
@@ -16,11 +12,7 @@ const DEFAULT_SYNC_SETTINGS = {
   },
   whitelist: []
 };
-const DEFAULT_LOCAL_STATS = {
-  savedMemoryMb: 0,
-  memoryHistory: {},
-  savedSessions: []
-};
+const DEFAULT_LOCAL_STATS = { savedMemoryMb: 0, memoryHistory: {}, savedSessions: [] };
 
 const elements = {
   themeToggle: document.getElementById("themeToggle"),
@@ -45,6 +37,9 @@ const elements = {
   statusText: document.getElementById("statusText")
 };
 
+// Глобальная переменная для устранения утечек setTimeout
+let statusTimeoutId;
+
 document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
@@ -64,6 +59,19 @@ function bindEvents() {
   elements.saveSession.addEventListener("click", () => runAction("saveSession", "Сессия сохранена"));
   elements.openOptions.addEventListener("click", () => chrome.runtime.openOptionsPage());
   elements.tabsList.addEventListener("click", handleTabAction);
+  
+  // Новый обработчик для добавления в белый список из попапа
+  elements.domainList.addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-whitelist]");
+    if (!button) return;
+    const domain = button.dataset.whitelist;
+    const settings = await getSyncSettings();
+    const whitelist = new Set(settings.whitelist || []);
+    whitelist.add(domain);
+    await chrome.storage.sync.set({ whitelist: Array.from(whitelist) });
+    setStatus(`Добавлен: ${domain}`);
+    await refreshDashboard();
+  });
 }
 
 async function getSyncSettings() {
@@ -97,9 +105,7 @@ async function runAction(action, successMessage, payload = {}) {
   setStatus("Выполняется...");
   try {
     const response = await chrome.runtime.sendMessage({ action, ...payload });
-    if (response?.error) {
-      throw new Error(response.error);
-    }
+    if (response?.error) throw new Error(response.error);
     const count = response?.count ?? 0;
     setStatus(`${successMessage}: ${count}`);
     await refreshDashboard();
@@ -132,50 +138,65 @@ async function refreshDashboard() {
   elements.profileSelect.value = settings.activeProfile || "balanced";
 
   renderHistoryChart(stats.memoryHistory || {});
-  renderDomainList(tabs);
+  renderDomainList(tabs, settings.whitelist || []);
   renderTabsList(tabs);
 }
 
 function renderHistoryChart(history) {
-  const days = getLastSevenDays();
-  const values = days.map((day) => Number(history[day.key] || 0));
-  const max = Math.max(...values, MEMORY_PER_TAB_MB);
-  const points = values.map((value, index) => {
-    const x = 16 + index * 48;
-    const y = 76 - (value / max) * 58;
-    return { x, y, value, label: days[index].label };
-  });
-  const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
-  const area = `${path} L ${points[points.length - 1].x} 82 L ${points[0].x} 82 Z`;
+  try {
+    const days = getLastSevenDays();
+    const values = days.map((day) => Number(history[day.key] || 0));
+    const max = Math.max(...values, MEMORY_PER_TAB_MB);
+    
+    if (!Number.isFinite(max) || max <= 0) throw new Error("Invalid chart data");
 
-  elements.historyChart.innerHTML = `
-    <line class="chart-grid" x1="12" y1="82" x2="308" y2="82"></line>
-    <line class="chart-grid" x1="12" y1="22" x2="308" y2="22"></line>
-    <path class="chart-area" d="${area}"></path>
-    <path class="chart-line" d="${path}"></path>
-    ${points.map((point) => `<circle class="chart-dot" cx="${point.x}" cy="${point.y}" r="4"><title>${point.label}: ${formatMemory(point.value)}</title></circle>`).join("")}
-    ${points.map((point) => `<text x="${point.x}" y="94" text-anchor="middle" fill="currentColor" opacity="0.55" font-size="9">${point.label}</text>`).join("")}
-  `;
+    const points = values.map((value, index) => {
+      const x = 16 + index * 48;
+      const y = 76 - (value / max) * 58;
+      return { x, y, value, label: days[index].label };
+    });
+    
+    const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`).join(" ");
+    const area = `${path} L ${points[points.length - 1].x} 82 L ${points[0].x} 82 Z`;
+
+    elements.historyChart.innerHTML = `
+      <line class="chart-grid" x1="12" y1="82" x2="308" y2="82"></line>
+      <line class="chart-grid" x1="12" y1="22" x2="308" y2="22"></line>
+      <path class="chart-area" d="${area}"></path>
+      <path class="chart-line" d="${path}"></path>
+      ${points.map((point) => `<circle class="chart-dot" cx="${point.x}" cy="${point.y}" r="4"><title>${point.label}: ${formatMemory(point.value)}</title></circle>`).join("")}
+      ${points.map((point) => `<text x="${point.x}" y="94" text-anchor="middle" fill="currentColor" opacity="0.55" font-size="9">${point.label}</text>`).join("")}
+    `;
+  } catch (error) {
+    elements.historyChart.innerHTML = `<text x="50%" y="50%" text-anchor="middle" fill="currentColor" opacity="0.55" font-size="11">Нет данных для графика</text>`;
+  }
 }
 
-function renderDomainList(tabs) {
+function renderDomainList(tabs, whitelist) {
   const grouped = new Map();
   for (const tab of tabs) {
     const domain = getDomain(tab.url) || "служебные страницы";
     grouped.set(domain, (grouped.get(domain) || 0) + 1);
   }
   const top = Array.from(grouped.entries()).sort((a, b) => b[1] - a[1]).slice(0, 4);
+  
   elements.domainsHint.textContent = String(grouped.size);
   elements.domainList.innerHTML = top.length
-    ? top.map(([domain, count], index) => `
-      <div class="domain-row ${index === 0 && count > 1 ? "hot" : ""}">
-        <div>
-          <div class="domain-name">${escapeHtml(domain)}</div>
-          <div class="domain-meta">${formatTabsLabelShort(count)}</div>
+    ? top.map(([domain, count], index) => {
+      const isWhite = isWhitelisted(`https://${domain}`, whitelist) || domain === "служебные страницы";
+      return `
+        <div class="domain-row ${index === 0 && count > 1 ? "hot" : ""}">
+          <div style="min-width: 0;">
+            <div class="domain-name">${escapeHtml(domain)}</div>
+            <div class="domain-meta">${formatTabsLabelShort(count)}</div>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <div class="domain-count">${count}</div>
+            ${!isWhite ? `<button class="mini-button" data-whitelist="${escapeAttribute(domain)}" title="Добавить в белый список">+</button>` : ``}
+          </div>
         </div>
-        <div class="domain-count">${count}</div>
-      </div>
-    `).join("")
+      `;
+    }).join("")
     : `<div class="empty-state">Открытых доменов нет</div>`;
 }
 
@@ -190,7 +211,7 @@ function renderTabsList(tabs) {
     return `
       <article class="tab-row ${tab.discarded ? "discarded" : ""}" data-tab-id="${tab.id}">
         ${favicon ? `<img class="tab-favicon" src="${escapeAttribute(favicon)}" alt="">` : `<span class="tab-favicon"></span>`}
-        <div>
+        <div style="min-width: 0;">
           <div class="tab-title" title="${escapeAttribute(title)}">${escapeHtml(title)}</div>
           <div class="tab-domain">${escapeHtml(domain)}</div>
         </div>
@@ -207,30 +228,18 @@ function renderTabsList(tabs) {
 async function handleTabAction(event) {
   const button = event.target.closest("button[data-action]");
   const row = event.target.closest(".tab-row");
-  if (!button || !row) {
-    return;
-  }
+  if (!button || !row) return;
+  
   const tabId = Number(row.dataset.tabId);
   const action = button.dataset.action;
-  if (action === "sleep") {
-    await runAction("discardTab", "Вкладка усыплена", { tabId });
-  }
-  if (action === "wake") {
-    await runAction("wakeTab", "Вкладка пробуждается", { tabId });
-  }
-  if (action === "close") {
-    await runAction("closeTab", "Вкладка закрыта", { tabId });
-  }
+  
+  if (action === "sleep") await runAction("discardTab", "Вкладка усыплена", { tabId });
+  if (action === "wake") await runAction("wakeTab", "Вкладка пробуждается", { tabId });
+  if (action === "close") await runAction("closeTab", "Вкладка закрыта", { tabId });
 }
 
 function isEligibleForDisplay(tab, whitelist) {
-  return Boolean(tab.id)
-    && !tab.active
-    && !tab.pinned
-    && !tab.audible
-    && !tab.discarded
-    && isAllowedUrl(tab.url)
-    && !isWhitelisted(tab.url, whitelist);
+  return Boolean(tab.id) && !tab.active && !tab.pinned && !tab.audible && !tab.discarded && isAllowedUrl(tab.url) && !isWhitelisted(tab.url, whitelist);
 }
 
 function isAllowedUrl(url = "") {
@@ -246,11 +255,7 @@ function isWhitelisted(url = "", whitelist = []) {
 }
 
 function getDomain(url = "") {
-  try {
-    return normalizeDomain(new URL(url).hostname);
-  } catch {
-    return "";
-  }
+  try { return normalizeDomain(new URL(url).hostname); } catch { return ""; }
 }
 
 function normalizeDomain(domain = "") {
@@ -262,60 +267,37 @@ function getLastSevenDays() {
   return Array.from({ length: 7 }, (_, index) => {
     const date = new Date();
     date.setDate(date.getDate() - (6 - index));
-    return {
-      key: date.toISOString().slice(0, 10),
-      label: formatter.format(date).replace(".", "")
-    };
+    return { key: date.toISOString().slice(0, 10), label: formatter.format(date).replace(".", "") };
   });
 }
 
 function getProfileLabel(profile) {
-  if (profile === "aggressive") {
-    return "Агрессивный";
-  }
-  if (profile === "reading") {
-    return "Режим чтения";
-  }
+  if (profile === "aggressive") return "Агрессивный";
+  if (profile === "reading") return "Режим чтения";
   return "Баланс";
 }
 
 function formatMemory(value) {
-  if (value >= 1024) {
-    return `${(value / 1024).toFixed(1)} ГБ`;
-  }
+  if (value >= 1024) return `${(value / 1024).toFixed(1)} ГБ`;
   return `${value} МБ`;
 }
 
 function formatTabsLabel(count) {
   const mod10 = count % 10;
   const mod100 = count % 100;
-  if (mod10 === 1 && mod100 !== 11) {
-    return `${count} усыпленная вкладка`;
-  }
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
-    return `${count} усыпленные вкладки`;
-  }
+  if (mod10 === 1 && mod100 !== 11) return `${count} усыпленная вкладка`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${count} усыпленные вкладки`;
   return `${count} усыпленных вкладок`;
 }
 
 function formatTabsLabelShort(count) {
-  if (count === 1) {
-    return "1 вкладка";
-  }
-  if (count >= 2 && count <= 4) {
-    return `${count} вкладки`;
-  }
+  if (count === 1) return "1 вкладка";
+  if (count >= 2 && count <= 4) return `${count} вкладки`;
   return `${count} вкладок`;
 }
 
 function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "\"": "&quot;",
-    "'": "&#039;"
-  })[char]);
+  return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#039;" })[char]);
 }
 
 function escapeAttribute(value) {
@@ -331,4 +313,8 @@ function setBusy(isBusy) {
 
 function setStatus(message) {
   elements.statusText.textContent = message;
+  window.clearTimeout(statusTimeoutId);
+  statusTimeoutId = window.setTimeout(() => {
+    elements.statusText.textContent = "Готово";
+  }, 2400);
 }

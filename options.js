@@ -30,6 +30,8 @@ const statusText = document.getElementById("optionsStatus");
 const sessionsHint = document.getElementById("sessionsHint");
 const sessionsList = document.getElementById("sessionsList");
 
+let statusTimeoutId;
+
 document.addEventListener("DOMContentLoaded", loadOptions);
 form.addEventListener("submit", saveOptions);
 themeToggle.addEventListener("click", toggleTheme);
@@ -78,9 +80,14 @@ async function toggleTheme() {
   setStatus("Тема сохранена");
 }
 
-function applyProfileTimer() {
+async function applyProfileTimer() {
   const activeProfile = profileSelect.value;
-  timerInput.value = String(PROFILE_TIMERS[activeProfile] ?? PROFILE_TIMERS.balanced);
+  const minutes = PROFILE_TIMERS[activeProfile] ?? PROFILE_TIMERS.balanced;
+  timerInput.value = String(minutes);
+  
+  // Сохраняем профиль сразу при выборе (как в popup)
+  await chrome.storage.sync.set({ activeProfile, autoSleepMinutes: minutes });
+  setStatus("Профиль обновлен");
 }
 
 function applyTheme(theme) {
@@ -109,18 +116,15 @@ function renderSessions(sessions) {
 
 async function restoreSessionFromList(event) {
   const button = event.target.closest("button[data-session-id]");
-  if (!button) {
-    return;
-  }
+  if (!button) return;
+  
   button.disabled = true;
   try {
     const response = await chrome.runtime.sendMessage({
       action: "restoreSession",
       sessionId: button.dataset.sessionId
     });
-    if (response?.error) {
-      throw new Error(response.error);
-    }
+    if (response?.error) throw new Error(response.error);
     setStatus(`Восстановлено вкладок: ${response?.count ?? 0}`);
   } catch (error) {
     setStatus(error.message || "Не удалось восстановить сессию");
@@ -131,9 +135,7 @@ async function restoreSessionFromList(event) {
 
 function clampNumber(value, min, max) {
   const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed)) {
-    return DEFAULT_SYNC_SETTINGS.autoSleepMinutes;
-  }
+  if (!Number.isFinite(parsed)) return DEFAULT_SYNC_SETTINGS.autoSleepMinutes;
   return Math.min(Math.max(parsed, min), max);
 }
 
@@ -149,23 +151,13 @@ function parseWhitelist(value) {
 function formatTabsLabel(count) {
   const mod10 = count % 10;
   const mod100 = count % 100;
-  if (mod10 === 1 && mod100 !== 11) {
-    return `${count} вкладка`;
-  }
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
-    return `${count} вкладки`;
-  }
+  if (mod10 === 1 && mod100 !== 11) return `${count} вкладка`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${count} вкладки`;
   return `${count} вкладок`;
 }
 
 function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "\"": "&quot;",
-    "'": "&#039;"
-  })[char]);
+  return String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#039;" })[char]);
 }
 
 function escapeAttribute(value) {
@@ -174,8 +166,8 @@ function escapeAttribute(value) {
 
 function setStatus(message) {
   statusText.textContent = message;
-  window.clearTimeout(setStatus.timeoutId);
-  setStatus.timeoutId = window.setTimeout(() => {
+  window.clearTimeout(statusTimeoutId);
+  statusTimeoutId = window.setTimeout(() => {
     statusText.textContent = "Настройки синхронизируются между устройствами";
   }, 2400);
 }
